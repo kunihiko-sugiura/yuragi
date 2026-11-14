@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>ゆらぎ</title>
+<style>
+  :root {
+    --paper: #efede7;
+    --ink: #5c6466;
+    --ink-faint: #7d8482;
+    --circle-saturation: 16%;
+    --circle-lightness: 52%;
+    --circle-alpha: 0.42;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #141718;
+      --ink: #a9b0b0;
+      --ink-faint: #737b7c;
+      --circle-saturation: 18%;
+      --circle-lightness: 70%;
+      --circle-alpha: 0.3;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+    overflow: hidden;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: max(28px, env(safe-area-inset-bottom));
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 28px;
+    padding: 0 16px;
+  }
+  button {
+    font: inherit;
+    font-size: 13px;
+    letter-spacing: 0.32em;
+    color: var(--ink-faint);
+    background: none;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    padding: 12px 4px 8px 8px;
+    min-width: 44px;
+    min-height: 44px;
+    cursor: pointer;
+    transition: color 0.8s ease, border-color 0.8s ease;
+  }
+  button:hover { color: var(--ink); }
+  button:focus-visible { outline: 1px solid var(--ink-faint); outline-offset: 4px; }
+  #toggle { color: var(--ink); min-width: 72px; }
+  button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--ink-faint); }
+  .rule { width: 1px; height: 14px; background: var(--ink-faint); opacity: 0.5; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body data-state="idle">
+<canvas id="field" aria-hidden="true"></canvas>
+<nav aria-label="再生操作">
+  <button id="toggle" type="button">再生</button>
+  <span class="rule" aria-hidden="true"></span>
+  <button id="timbre-piano" type="button" data-timbre="piano" aria-pressed="true" aria-label="音源A ピアノ的">A</button>
+  <button id="timbre-pad" type="button" data-timbre="pad" aria-pressed="false" aria-label="音源B パッド的">B</button>
+</nav>
+<script src="engine.js"></script>
+<script>
+(() => {
+  'use strict';
+  const { CONFIG, createEngine, loudnessAt } = Yuragi;
+  const FADE_IN = 0.5;
+  const FADE_OUT = 0.7;
+  const CLOSE_AFTER_MS = 3200;
+
+  const canvas = document.getElementById('field');
+  const pen = canvas.getContext('2d');
+  const toggle = document.getElementById('toggle');
+  const timbreButtons = [...document.querySelectorAll('[data-timbre]')];
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const params = new URLSearchParams(location.search);
+  const tuning = params.get('tuning');
+  // 改訂前のピアノと聴き比べるための入口。?a=soft で A が旧音色になる。
+  const pianoTimbre = params.get('a') === 'soft' ? 'pianoSoft' : 'piano';
+  document.getElementById('timbre-piano').dataset.timbre = pianoTimbre;
+
+  const player = { state: 'idle', timbre: pianoTimbre, context: null, engine: null, analyser: null, events: [], played: 0, timer: 0, closing: 0, frame: 0 };
+
+  function fade(target, timeConstant) {
+    const gain = player.engine.master.gain;
+    const now = player.context.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setTargetAtTime(target, now, timeConstant);
+  }
+
+  function schedule() {
+    const until = player.context.currentTime + CONFIG.scheduler.lookahead;
+    const created = player.engine.scheduleUntil(until);
+    player.played += created.length;
+    player.events.push(...created);
+  }
+
+  function begin() {
+    const context = new AudioContext({ latencyHint: 'playback' });
+    const engine = createEngine(context, { timbre: player.timbre, tuning });
+    const analyser = context.createAnalyser();
+    engine.master.connect(analyser);
+    engine.master.gain.value = 0;
+    Object.assign(player, { context, engine, analyser, events: [] });
+    context.resume();
+    fade(1, FADE_IN);
+    engine.start(context.currentTime + CONFIG.scheduler.lead);
+    schedule();
+    player.timer = setInterval(schedule, CONFIG.scheduler.tick * 1000);
+    if (!player.frame) player.frame = requestAnimationFrame(draw);
+  }
+
+  function beginStop() {
+    fade(0, FADE_OUT);
+    player.closing = setTimeout(finishStop, CLOSE_AFTER_MS);
+  }
+
+  function resume() {
+    clearTimeout(player.closing);
+    fade(1, FADE_IN);
+  }
+
+  function finishStop() {
+    clearInterval(player.timer);
+    player.context.close();
+    Object.assign(player, { context: null, engine: null, analyser: null, events: [] });
+    enter('idle');
+  }
+
+  const TRANSITIONS = {
+    idle: { toggle: { run: begin, to: 'playing' } },
+    playing: { toggle: { run: beginStop, to: 'stopping' } },
+    stopping: { toggle: { run: resume, to: 'playing' } },
+  };
+  const LABELS = { idle: '再生', playing: '停止', stopping: '再生' };
+
+  function enter(state) {
+    player.state = state;
+    document.body.dataset.state = state;
+    toggle.textContent = LABELS[state];
+  }
+
+  toggle.addEventListener('click', () => {
+    const transition = TRANSITIONS[player.state].toggle;
+    transition.run();
+    enter(transition.to);
+  });
+
+  for (const button of timbreButtons) {
+    button.addEventListener('click', () => {
+      player.timbre = button.dataset.timbre;
+      if (player.engine) player.engine.timbre = player.timbre;
+      for (const other of timbreButtons) other.setAttribute('aria-pressed', String(other === button));
+    });
+  }
+
+  function resize() {
+    const ratio = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(innerWidth * ratio);
+    canvas.height = Math.round(innerHeight * ratio);
+    pen.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  function draw() {
+    player.frame = 0;
+    pen.clearRect(0, 0, innerWidth, innerHeight);
+    if (!player.context) return;
+
+    const style = getComputedStyle(document.documentElement);
+    const saturation = style.getPropertyValue('--circle-saturation');
+    const lightness = style.getPropertyValue('--circle-lightness');
+    const strength = Number(style.getPropertyValue('--circle-alpha'));
+    const now = player.context.currentTime - (player.context.outputLatency || 0);
+    const unit = Math.min(innerWidth, innerHeight) * 0.17;
+    const audible = player.engine.master.gain.value;
+
+    player.events = player.events.filter((ev) => ev.time + ev.dur > now);
+    for (const ev of player.events) {
+      const age = now - ev.time;
+      if (age < 0) continue;
+      const voice = CONFIG.voices[ev.voice];
+      const timbre = CONFIG.timbres[ev.timbre];
+      const alpha = Math.cbrt(loudnessAt(timbre, age, ev.dur)) * strength * audible;
+      if (alpha < 0.003) continue;
+      const growth = reducedMotion.matches ? 1 : 0.75 + 0.45 * Math.sqrt(age / ev.dur);
+      const radius = unit * voice.size * timbre.visualScale * growth;
+      const x = voice.x * innerWidth;
+      const y = voice.y * innerHeight;
+      const hue = 168 + ev.voice * 11;
+      const wash = pen.createRadialGradient(x, y, 0, x, y, radius);
+      wash.addColorStop(0, `hsl(${hue} ${saturation} ${lightness} / ${alpha})`);
+      wash.addColorStop(0.45, `hsl(${hue} ${saturation} ${lightness} / ${alpha * 0.55})`);
+      wash.addColorStop(1, `hsl(${hue} ${saturation} ${lightness} / 0)`);
+      pen.fillStyle = wash;
+      pen.beginPath();
+      pen.arc(x, y, radius, 0, Math.PI * 2);
+      pen.fill();
+    }
+    player.frame = requestAnimationFrame(draw);
+  }
+
+  window.__yuragi = {
+    get context() { return player.context; },
+    get events() { return player.events; },
+    get played() { return player.played; },
+    level() {
+      const data = new Float32Array(player.analyser.fftSize);
+      player.analyser.getFloatTimeDomainData(data);
+      return Math.max(...data.map(Math.abs));
+    },
+  };
+})();
+</script>
+</body>
+</html>
