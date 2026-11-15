@@ -10,18 +10,18 @@
     --paper: #efede7;
     --ink: #5c6466;
     --ink-faint: #7d8482;
-    --circle-saturation: 16%;
-    --circle-lightness: 52%;
-    --circle-alpha: 0.42;
+    --circle-saturation: 38%;
+    --circle-lightness: 66%;
+    --circle-alpha: 0.5;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --paper: #141718;
       --ink: #a9b0b0;
       --ink-faint: #737b7c;
-      --circle-saturation: 18%;
-      --circle-lightness: 70%;
-      --circle-alpha: 0.3;
+      --circle-saturation: 42%;
+      --circle-lightness: 80%;
+      --circle-alpha: 0.52;
     }
   }
   * { box-sizing: border-box; }
@@ -32,7 +32,7 @@
     font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
     overflow: hidden;
   }
-  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; filter: blur(0.45vmin); }
   nav {
     position: fixed;
     left: 0;
