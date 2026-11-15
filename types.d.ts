@@ -120,7 +120,7 @@ interface YuragiApi {
 
 /** verify.mjs が index.html の状態を覗くための窓口 */
 interface DebugHandle {
-  readonly context: AudioContext | null;
+  readonly context: AudioContext;
   readonly events: NoteEvent[];
   readonly played: number;
   level(): number;

@@ -3,8 +3,6 @@
   'use strict';
   const { CONFIG, createEngine, loudnessAt } = Yuragi;
   const FADE_IN = 0.5;
-  const FADE_OUT = 0.7;
-  const CLOSE_AFTER_MS = 3200;
 
   /**
    * @template {HTMLElement} T
@@ -20,113 +18,44 @@
 
   const canvas = byId('field', HTMLCanvasElement);
   const pen = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
-  const toggle = byId('toggle', HTMLButtonElement);
   const timbreButtons = [...document.querySelectorAll('button[data-timbre]')].filter((b) => b instanceof HTMLButtonElement);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const params = new URLSearchParams(location.search);
   const tuning = params.get('tuning');
-  // 改訂前のピアノと聴き比べるための入口。?a=soft で A が旧音色になる。
+  // 改訂前のピアノと聴き比べるための入口。?a=soft でピアノ側が旧音色になる。
   /** @type {TimbreName} */
   const pianoTimbre = params.get('a') === 'soft' ? 'pianoSoft' : 'piano';
   byId('timbre-piano', HTMLButtonElement).dataset.timbre = pianoTimbre;
 
-  /** @typedef {'idle' | 'playing' | 'stopping'} State */
-
-  /**
-   * @type {{
-   *   state: State,
-   *   timbre: TimbreName,
-   *   context: AudioContext | null,
-   *   engine: Engine | null,
-   *   analyser: AnalyserNode | null,
-   *   events: NoteEvent[],
-   *   played: number,
-   *   timer: number,
-   *   closing: number,
-   *   frame: number,
-   * }}
-   */
-  const player = { state: 'idle', timbre: pianoTimbre, context: null, engine: null, analyser: null, events: [], played: 0, timer: 0, closing: 0, frame: 0 };
-
-  /**
-   * @param {number} target
-   * @param {number} timeConstant
-   */
-  function fade(target, timeConstant) {
-    if (!player.context || !player.engine) return;
-    const gain = player.engine.master.gain;
-    const now = player.context.currentTime;
-    gain.cancelScheduledValues(now);
-    gain.setTargetAtTime(target, now, timeConstant);
-  }
+  const context = new AudioContext({ latencyHint: 'playback' });
+  const engine = createEngine(context, { timbre: pianoTimbre, tuning });
+  const analyser = context.createAnalyser();
+  /** @type {{ events: NoteEvent[], played: number }} */
+  const player = { events: [], played: 0 };
 
   function schedule() {
-    if (!player.context || !player.engine) return;
-    const until = player.context.currentTime + CONFIG.scheduler.lookahead;
-    const created = player.engine.scheduleUntil(until);
+    const created = engine.scheduleUntil(context.currentTime + CONFIG.scheduler.lookahead);
     player.played += created.length;
     player.events.push(...created);
   }
 
-  function begin() {
-    const context = new AudioContext({ latencyHint: 'playback' });
-    const engine = createEngine(context, { timbre: player.timbre, tuning });
-    const analyser = context.createAnalyser();
-    engine.master.connect(analyser);
-    engine.master.gain.value = 0;
-    Object.assign(player, { context, engine, analyser, events: [] });
-    context.resume();
-    fade(1, FADE_IN);
-    engine.start(context.currentTime + CONFIG.scheduler.lead);
-    schedule();
-    player.timer = setInterval(schedule, CONFIG.scheduler.tick * 1000);
-    if (!player.frame) player.frame = requestAnimationFrame(draw);
+  engine.master.connect(analyser);
+  engine.master.gain.value = 0;
+  engine.master.gain.setTargetAtTime(1, context.currentTime, FADE_IN);
+  engine.start(context.currentTime + CONFIG.scheduler.lead);
+  schedule();
+  setInterval(schedule, CONFIG.scheduler.tick * 1000);
+
+  // ブラウザは操作なしの発音を止める。止められた場合は最初の操作で鳴り始める。
+  function wake() {
+    if (context.state !== 'running') context.resume();
   }
-
-  function beginStop() {
-    fade(0, FADE_OUT);
-    player.closing = setTimeout(finishStop, CLOSE_AFTER_MS);
-  }
-
-  function resume() {
-    clearTimeout(player.closing);
-    fade(1, FADE_IN);
-  }
-
-  function finishStop() {
-    clearInterval(player.timer);
-    player.context?.close();
-    Object.assign(player, { context: null, engine: null, analyser: null, events: [] });
-    enter('idle');
-  }
-
-  /** @type {Record<State, { toggle: { run: () => void, to: State } }>} */
-  const TRANSITIONS = {
-    idle: { toggle: { run: begin, to: 'playing' } },
-    playing: { toggle: { run: beginStop, to: 'stopping' } },
-    stopping: { toggle: { run: resume, to: 'playing' } },
-  };
-  /** @type {Record<State, string>} */
-  const LABELS = { idle: '再生', playing: '停止', stopping: '再生' };
-
-  /** @param {State} state */
-  function enter(state) {
-    player.state = state;
-    document.body.dataset.state = state;
-    toggle.textContent = LABELS[state];
-  }
-
-  toggle.addEventListener('click', () => {
-    const transition = TRANSITIONS[player.state].toggle;
-    transition.run();
-    enter(transition.to);
-  });
+  for (const type of ['pointerdown', 'pointerup', 'keydown']) addEventListener(type, wake);
 
   for (const button of timbreButtons) {
     button.addEventListener('click', () => {
       // data-timbre はこのページで設定した値だけ。
-      player.timbre = /** @type {TimbreName} */ (button.dataset.timbre);
-      if (player.engine) player.engine.timbre = player.timbre;
+      engine.timbre = /** @type {TimbreName} */ (button.dataset.timbre);
       for (const other of timbreButtons) other.setAttribute('aria-pressed', String(other === button));
     });
   }
@@ -141,10 +70,7 @@
   resize();
 
   function draw() {
-    player.frame = 0;
     pen.clearRect(0, 0, innerWidth, innerHeight);
-    const { context, engine } = player;
-    if (!context || !engine) return;
 
     const style = getComputedStyle(document.documentElement);
     const saturation = style.getPropertyValue('--circle-saturation');
@@ -176,18 +102,18 @@
       pen.arc(x, y, radius, 0, Math.PI * 2);
       pen.fill();
     }
-    player.frame = requestAnimationFrame(draw);
+    requestAnimationFrame(draw);
   }
+  requestAnimationFrame(draw);
 
   /** @type {DebugHandle} */
   window.__yuragi = {
-    get context() { return player.context; },
+    context,
     get events() { return player.events; },
     get played() { return player.played; },
     level() {
-      if (!player.analyser) return 0;
-      const data = new Float32Array(player.analyser.fftSize);
-      player.analyser.getFloatTimeDomainData(data);
+      const data = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(data);
       return Math.max(...data.map(Math.abs));
     },
   };
