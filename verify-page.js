@@ -1,0 +1,180 @@
+// @ts-check
+const out = /** @type {HTMLPreElement} */ (document.getElementById('out'));
+
+(async () => {
+  const SECONDS = Number(new URLSearchParams(location.search).get('seconds')) || 300;
+  const RATE = 48000;
+  const { CONFIG, createEngine, nominalLength } = Yuragi;
+  /** @param {number} x */
+  const db = (x) => +(20 * Math.log10(Math.max(x, 1e-12))).toFixed(1);
+
+  /**
+   * @param {Float32Array} data
+   * @param {number} hz
+   * @param {number} from
+   * @param {number} to
+   */
+  function goertzel(data, hz, from, to) {
+    const w = (2 * Math.PI * hz) / RATE;
+    const c = 2 * Math.cos(w);
+    let s1 = 0, s2 = 0;
+    for (let i = from; i < to; i++) {
+      const s0 = data[i] + c * s1 - s2;
+      s2 = s1;
+      s1 = s0;
+    }
+    return Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - c * s1 * s2)) / (to - from);
+  }
+
+  // 1秒ごとにHann窓をかけて測り、エネルギーを足す。全体を1本で測ると、
+  // 位相がランダムな音同士が打ち消し合い、結果が10dB近くぶれる。
+  /**
+   * @param {Float32Array} data
+   * @param {number} hz
+   */
+  function bandEnergy(data, hz) {
+    const size = RATE;
+    const w = (2 * Math.PI * hz) / RATE;
+    const c = 2 * Math.cos(w);
+    let total = 0;
+    for (let from = 0; from + size <= data.length; from += size) {
+      let s1 = 0, s2 = 0;
+      for (let i = 0; i < size; i++) {
+        const s0 = data[from + i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / size)) + c * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+      }
+      total += Math.max(0, s1 * s1 + s2 * s2 - c * s1 * s2);
+    }
+    return Math.sqrt(total);
+  }
+
+  /**
+   * @param {TimbreName} timbre
+   * @param {Omit<EngineOptions, 'timbre'>} [options]
+   */
+  async function render(timbre, options = {}) {
+    const ctx = new OfflineAudioContext(2, SECONDS * RATE, RATE);
+    const engine = createEngine(ctx, { timbre, ...options });
+    engine.master.gain.value = 1;
+    engine.start(0);
+    const events = engine.scheduleUntil(SECONDS);
+    const started = performance.now();
+    const buffer = await ctx.startRendering();
+    const left = buffer.getChannelData(0);
+    const right = buffer.getChannelData(1);
+    let peak = 0, sum = 0, bad = 0, cross = 0;
+    for (let i = 0; i < left.length; i++) {
+      const l = left[i], r = right[i];
+      if (!Number.isFinite(l) || !Number.isFinite(r)) bad++;
+      peak = Math.max(peak, Math.abs(l), Math.abs(r));
+      sum += l * l + r * r;
+      cross += l * r;
+    }
+    return { ctx, engine, events, left, peak, rms: Math.sqrt(sum / (2 * left.length)), bad, stereo: cross / (sum / 2), ms: Math.round(performance.now() - started) };
+  }
+
+  /** @typedef {{ name: string, ok: boolean, detail?: unknown }} Check */
+  /** @type {{ seconds: number, checks: Check[], pass?: boolean, [key: string]: unknown }} */
+  const report = { seconds: SECONDS, checks: [] };
+  /**
+   * @param {string} name
+   * @param {boolean} ok
+   * @param {unknown} [detail]
+   */
+  const check = (name, ok, detail) => report.checks.push({ name, ok, detail });
+
+  for (const timbre of /** @type {TimbreName[]} */ (Object.keys(CONFIG.timbres))) {
+    const spec = CONFIG.timbres[timbre];
+    const full = await render(timbre);
+    const dryOnly = await render(timbre, { reverb: false });
+    const y = CONFIG.yuragi;
+
+    check(`${timbre}: 出力に NaN / Infinity がない`, full.bad === 0, full.bad);
+    check(`${timbre}: ピークが -3 dBFS 未満（リミッターなしで歪まない）`, full.peak < 0.708, `${db(full.peak)} dBFS`);
+    check(`${timbre}: 音が出ている（RMS > -50 dBFS）`, full.rms > 0.00316, `${db(full.rms)} dBFS`);
+    report[timbre] = {
+      peakDb: db(full.peak),
+      rmsDb: db(full.rms),
+      dryRmsDb: db(dryOnly.rms),
+      wetMinusDryDb: +(10 * Math.log10(Math.max(full.rms ** 2 - dryOnly.rms ** 2, 1e-12) / dryOnly.rms ** 2)).toFixed(1),
+      stereoCorrelation: +full.stereo.toFixed(2),
+      notes: full.events.length,
+      renderMs: full.ms,
+    };
+
+    const byVoice = CONFIG.voices.map((_, i) => full.events.filter((e) => e.voice === i));
+    const periodOk = byVoice.every((list, i) => list.slice(1).every((e, n) => {
+      const ratio = (e.time - list[n].time) / CONFIG.voices[i].period;
+      return Math.abs(ratio - 1) <= y.period + 1e-9;
+    }));
+    check(`${timbre}: 各声部の周期が公称値の ±${y.period * 100}% 以内`, periodOk, byVoice.map((l) => l.length).join('/'));
+    check(`${timbre}: 開始時刻 0 で 1 声部が鳴る`, full.events.some((e) => e.time === 0), Math.min(...full.events.map((e) => e.time)));
+    const nominal = nominalLength(spec);
+    check(`${timbre}: 1音ごとの音量・長さ・カットオフが仕様の幅に収まる`, full.events.every((e) =>
+      Math.abs(e.gainDb) <= y.noteDb && Math.abs(e.dur / nominal - 1) <= y.length + 1e-9 && Math.abs(e.cutoffMul - 1) <= y.cutoff + 1e-9));
+
+    const onsets = full.events.map((e) => e.time).sort((a, b) => a - b);
+    const gaps = onsets.slice(1).map((t, i) => +(t - onsets[i]).toFixed(2));
+    check(`${timbre}: 発音間隔の並びが繰り返さない（同じ間隔が 2 回出ない）`, new Set(gaps).size > gaps.length * 0.9, `${new Set(gaps).size}/${gaps.length} 種類`);
+
+    const octave = 2 ** spec.octave;
+    const inScale = full.engine.voices.map((v) => bandEnergy(dryOnly.left, v.freq * octave));
+    const offScale = [146.83, 196.0, 261.63, 329.63].map((hz) => bandEnergy(dryOnly.left, hz * octave));
+    const margin = db(Math.min(...inScale) / Math.max(...offScale));
+    check(`${timbre}: 音階の 6 音にエネルギーがあり、音階外（D G C E）より 20 dB 以上強い`, margin > 20, `${margin} dB`);
+  }
+
+  /** @param {TimbreName} timbre */
+  async function singleNote(timbre) {
+    const ctx = new OfflineAudioContext(1, 8 * RATE, RATE);
+    /** @type {NoteEvent} */
+    const ev = { voice: 0, timbre, time: 0, freq: CONFIG.rootHz * 2 ** (4 / 12), dur: nominalLength(CONFIG.timbres[timbre]), gainDb: 0, cutoffMul: 1 };
+    Yuragi.renderNote(ctx, ctx.destination, ev, CONFIG);
+    const data = (await ctx.startRendering()).getChannelData(0);
+    const win = RATE / 100;
+    /** @type {number[]} */
+    const env = [];
+    for (let i = 0; i + win <= data.length; i += win) {
+      let sum = 0;
+      for (let j = i; j < i + win; j++) sum += data[j] * data[j];
+      env.push(Math.sqrt(sum / win));
+    }
+    const peakIndex = env.indexOf(Math.max(...env));
+    /** @param {number} s 秒 */
+    const at = (s) => db(env[Math.round(s * 100)] / env[peakIndex]);
+    const f = ev.freq * 2 ** CONFIG.timbres[timbre].octave;
+    /**
+     * @param {number} from 秒
+     * @param {number} to 秒
+     */
+    const bright = (from, to) => {
+      const a = Math.round(from * RATE), b = Math.round(to * RATE);
+      let hi = 0, all = 0;
+      for (let k = 1; k <= 8; k++) {
+        const e = goertzel(data, f * k, a, b) ** 2;
+        all += e;
+        if (k >= 3) hi += e;
+      }
+      return db(Math.sqrt(hi / all));
+    };
+    return { peakMs: peakIndex * 10, at05: at(0.5), at1: at(1), at3: at(3), upperPartialsAttackDb: bright(0, 0.15), upperPartials2sDb: bright(2, 2.3) };
+  }
+  for (const timbre of /** @type {const} */ (['piano', 'pianoSoft'])) report[`${timbre}Note`] = await singleNote(timbre);
+  const note = /** @type {Awaited<ReturnType<typeof singleNote>>} */ (report.pianoNote);
+  check('piano: 打鍵から 20 ms 以内に最大音量', note.peakMs <= 20, `${note.peakMs} ms`);
+  check('piano: 二段減衰（最初の 1 秒で 1〜3 秒より速く落ちる）', note.at1 < -6 && note.at1 / 1 < (note.at3 - note.at1) / 2, `0.5s ${note.at05} / 1s ${note.at1} / 3s ${note.at3} dB`);
+  check('piano: 高い倍音が時間とともに減る（打鍵直後より 2 秒後が暗い）', note.upperPartials2sDb < note.upperPartialsAttackDb - 6, `${note.upperPartialsAttackDb} → ${note.upperPartials2sDb} dB`);
+
+  const a = await render('pad');
+  const b = await render('pad');
+  const same = a.events.length === b.events.length && a.events.every((e, i) => Math.abs(e.time - b.events[i].time) < 1e-6);
+  check('2 回の再生で発音時刻の並びが異なる', !same);
+
+  report.pass = report.checks.every((c) => c.ok);
+  out.textContent = JSON.stringify(report, null, 2);
+  document.title = report.pass ? 'pass' : 'fail';
+})().catch((error) => {
+  out.textContent = String(error && error.stack || error);
+  document.title = 'error';
+});

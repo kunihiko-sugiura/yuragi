@@ -31,11 +31,13 @@
 
 | ファイル | 役割 |
 |---|---|
-| `index.html` | 再生ページ。再生状態の管理と描画 |
+| `index.html` | 再生ページ |
+| `app.js` | AudioContext の開始、音色の切り替え、描画 |
 | `engine.js` | 音の生成。数値はすべて冒頭の `CONFIG` にまとめてあります |
+| `types.d.ts` | JSDoc から参照する型定義（型検査専用。ブラウザは読みません） |
 | `ambient-loop-spec.md` | 仕様 v2 |
 | `ambient-loop-spec.v1.md` | 仕様 v1（改訂前） |
-| `verify.html` / `verify.mjs` | 自動検証 |
+| `verify.html` / `verify-page.js` / `verify.mjs` | 自動検証 |
 
 ## 音を調整する
 
@@ -49,6 +51,15 @@
 | 明るさ | `timbres.*.cutoff`（基音の何倍でローパスをかけるか） |
 | 残響の量と長さ | `reverb.wet` / `reverb.seconds` |
 | ゆらぎの幅 | `yuragi` |
+
+## 型検査
+
+JavaScript のまま、JSDoc の型注釈を TypeScript で検査しています。ビルドはありません。
+
+```sh
+npm install
+npm run typecheck
+```
 
 ## 検証
 

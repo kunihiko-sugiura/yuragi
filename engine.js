@@ -1,6 +1,8 @@
+// @ts-check
 (function (global) {
   'use strict';
 
+  /** @type {Config} */
   const CONFIG = {
     rootHz: 138.591,
     tuning: 'et',
@@ -81,10 +83,18 @@
     curveRate: { envelope: 1000, partial: 200, slow: 20 },
   };
 
+  /** 三角分布の乱数（-1〜1） */
   const tri = () => Math.random() + Math.random() - 1;
+  /** @param {number} db */
   const dbToGain = (db) => 10 ** (db / 20);
 
   // オクターブ間隔の値ノイズを等振幅で足すと、パワーがおよそ1/fになる。
+  /**
+   * @param {number} seconds
+   * @param {number} rate 1秒あたりの点数
+   * @param {YuragiConfig} y
+   * @returns {Float32Array} -1〜1 の曲線
+   */
   function pinkCurve(seconds, rate, y) {
     const n = Math.max(2, Math.ceil(seconds * rate) + 1);
     const out = new Float32Array(n);
@@ -106,10 +116,16 @@
     return out;
   }
 
+  /** @param {Timbre} timbre */
   function nominalLength(timbre) {
     return timbre.attack + timbre.hold + timbre.release;
   }
 
+  /**
+   * @param {Timbre} timbre
+   * @param {number} t 発音からの経過秒
+   * @param {number} dur 音の長さ（秒）
+   */
   function shapeAt(timbre, t, dur) {
     if (t <= 0 || t >= dur) return 0;
     const s = dur / nominalLength(timbre);
@@ -123,6 +139,12 @@
 
   // 打鍵直後に速く落ち、その後長く残る二段の減衰。ピアノでは複数の弦が
   // 駒を介して結合するために起きる。高い倍音ほど両方の段が速い。
+  /**
+   * @param {Timbre} timbre
+   * @param {number} t 発音からの経過秒
+   * @param {number} k 倍音の番号（1 が基音）
+   * @param {number} stretch 公称長に対する実際の長さの比
+   */
   function decayAt(timbre, t, k, stretch) {
     const d = timbre.decay;
     if (!d) return 1;
@@ -130,10 +152,19 @@
     return (1 - d.after) * Math.exp((-scale * t) / d.prompt60) + d.after * Math.exp((-scale * t) / d.after60);
   }
 
+  /**
+   * @param {Timbre} timbre
+   * @param {number} t
+   * @param {number} dur
+   */
   function loudnessAt(timbre, t, dur) {
     return shapeAt(timbre, t, dur) * decayAt(timbre, t, 1, dur / nominalLength(timbre));
   }
 
+  /**
+   * @param {BaseAudioContext} ctx
+   * @param {ReverbConfig} reverb
+   */
   function makeImpulse(ctx, reverb) {
     const rate = ctx.sampleRate;
     const length = Math.ceil((reverb.seconds + reverb.preDelay) * rate);
@@ -155,6 +186,10 @@
   }
 
   // 6声部のピークが偶然そろったときだけ働く保険。0.7未満の信号には触れない。
+  /**
+   * @param {BaseAudioContext} ctx
+   * @returns {GainNode} ここへつなぐと destination へ出る
+   */
   function softClip(ctx) {
     const knee = 0.7;
     const curve = new Float32Array(4097);
@@ -172,6 +207,12 @@
     return input;
   }
 
+  /**
+   * @param {BaseAudioContext} ctx
+   * @param {AudioNode} destination
+   * @param {NoteEvent} ev
+   * @param {Config} config
+   */
   function renderNote(ctx, destination, ev, config) {
     const timbre = config.timbres[ev.timbre];
     const y = config.yuragi;
@@ -198,7 +239,9 @@
     filter.connect(noteGain);
 
     const shared = pinkCurve(dur, rate.slow, y);
-    const layers = [[-1, 1], [1, timbre.unison]].map(([sign, weight]) => {
+    /** @type {[sign: number, weight: number][]} */
+    const pairs = [[-1, 1], [1, timbre.unison]];
+    const layers = pairs.map(([sign, weight]) => {
       const own = pinkCurve(dur, rate.slow, y);
       const cents = shared.map((v, i) => v * timbre.drift.shared + own[i] * timbre.drift.layer);
       const source = ctx.createConstantSource();
@@ -243,9 +286,23 @@
     }
   }
 
+  /**
+   * @template {object} T
+   * @param {T} obj
+   * @param {unknown} key
+   * @returns {key is keyof T}
+   */
+  const hasKey = (obj, key) => typeof key === 'string' && Object.hasOwn(obj, key);
+
+  /**
+   * @param {BaseAudioContext} ctx
+   * @param {EngineOptions} [options]
+   * @returns {Engine}
+   */
   function createEngine(ctx, options = {}) {
     const config = options.config || CONFIG;
-    const ratios = config.tunings[options.tuning] || config.tunings[config.tuning];
+    const ratios = hasKey(config.tunings, options.tuning) ? config.tunings[options.tuning] : config.tunings[config.tuning];
+    /** @type {TimbreName} */
     let timbreName = options.timbre || 'piano';
 
     const master = ctx.createGain();
@@ -260,6 +317,7 @@
     input.connect(dry).connect(master);
     input.connect(convolver).connect(wet).connect(master);
 
+    /** @type {Voice[]} */
     const voices = config.voices.map((voice, index) => ({
       ...voice,
       index,
@@ -268,20 +326,27 @@
       jitter: 0,
     }));
 
+    /** @param {number} time */
     function start(time) {
       for (const voice of voices) voice.next = time + Math.random() * voice.period;
       // 開始直後の長い無音は故障に見える。1声部だけ即座に鳴らす。
       voices[Math.floor(Math.random() * voices.length)].next = time;
     }
 
+    /**
+     * @param {number} until この時刻より前の発音をすべて予約する
+     * @returns {NoteEvent[]} 新たに予約したイベント
+     */
     function scheduleUntil(until) {
       const y = config.yuragi;
+      /** @type {NoteEvent[]} */
       const created = [];
       for (const voice of voices) {
         while (voice.next < until) {
           // スリープ復帰後などに、遅れた分をまとめて鳴らさない。
           if (voice.next >= ctx.currentTime) {
             const timbre = config.timbres[timbreName];
+            /** @type {NoteEvent} */
             const ev = {
               voice: voice.index,
               timbre: timbreName,
@@ -310,10 +375,11 @@
         return timbreName;
       },
       set timbre(name) {
-        if (config.timbres[name]) timbreName = name;
+        if (hasKey(config.timbres, name)) timbreName = name;
       },
     };
   }
 
+  /** @type {YuragiApi} */
   global.Yuragi = { CONFIG, createEngine, renderNote, loudnessAt, nominalLength };
 })(window);

@@ -1,0 +1,12 @@
+{
+  "name": "yuragi",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "verify": "node verify.mjs --live"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "~6.0.2"
+  }
+}

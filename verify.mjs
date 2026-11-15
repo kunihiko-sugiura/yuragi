@@ -1,3 +1,4 @@
+// @ts-check
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,17 +14,23 @@ const chrome = spawn(chromePath, [
   '--no-first-run', '--window-size=1280,800', 'about:blank',
 ], { stdio: 'ignore' });
 
+/** @param {number} ms */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let failed = false;
+/**
+ * @param {boolean} ok
+ * @param {string} message
+ */
 const assert = (ok, message) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${message}`);
   if (!ok) failed = true;
 };
 
+/** @returns {Promise<string>} */
 async function connect() {
   for (let i = 0; i < 50; i++) {
     try {
-      const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+      const targets = /** @type {{ type: string, webSocketDebuggerUrl: string }[]} */ (await (await fetch(`http://127.0.0.1:${port}/json`)).json());
       const page = targets.find((t) => t.type === 'page');
       if (page) return page.webSocketDebuggerUrl;
     } catch {}
@@ -36,27 +43,45 @@ try {
   const socket = new WebSocket(await connect());
   await new Promise((resolve) => (socket.onopen = resolve));
   let id = 0;
+  /** @type {Map<number, (result: any) => void>} */
   const pending = new Map();
+  /** @type {string[]} */
   const problems = [];
   socket.onmessage = ({ data }) => {
     const message = JSON.parse(data);
     if (message.id) pending.get(message.id)?.(message.result ?? message.error);
     if (message.method === 'Runtime.exceptionThrown') problems.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text);
-    if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') problems.push(message.params.args.map((a) => a.value ?? a.description).join(' '));
+    if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') problems.push(message.params.args.map((/** @type {{ value?: unknown, description?: string }} */ a) => a.value ?? a.description).join(' '));
   };
+  /**
+   * Chrome DevTools Protocol のコマンドを送り、結果を待つ。
+   * @param {string} method
+   * @param {Record<string, unknown>} [params]
+   * @returns {Promise<any>}
+   */
   const send = (method, params = {}) => new Promise((resolve) => {
     pending.set(++id, resolve);
     socket.send(JSON.stringify({ id, method, params }));
   });
+  /**
+   * @param {string} expression ページ内で評価する式
+   * @returns {Promise<any>}
+   */
   const evaluate = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result?.value;
+  /**
+   * @param {string} file
+   * @param {string} [query]
+   */
   const open = async (file, query = '') => {
     await send('Page.navigate', { url: pathToFileURL(join(here, file)).href + query });
     await sleep(500);
   };
+  /** @param {string} selector */
   const click = async (selector) => {
     const { x, y } = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
   };
+  /** @param {string} name */
   const shot = async (name) => {
     const { data } = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(join(here, 'verify-out', name), Buffer.from(data, 'base64'));

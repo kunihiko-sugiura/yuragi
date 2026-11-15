@@ -142,8 +142,8 @@ centで決めない理由は2つある。±3centのずれは周波数に比例�
 | ファイル | 役割 |
 |---|---|
 | `engine.js` | 音の生成すべて。`CONFIG`（全数値）、発音イベントの生成、合成、残響 |
-| `index.html` | AudioContextの開始、スケジューラのタイマー、音色の切替、描画 |
-| `verify.html` / `verify.mjs` | 検証。`node verify.mjs --live` で実行する |
+| `index.html` / `app.js` | AudioContextの開始、スケジューラのタイマー、音色の切替、描画 |
+| `verify.html` / `verify-page.js` / `verify.mjs` | 検証。`node verify.mjs --live` で実行する |
 
 ### ゆらぎは発音時に焼き込む
 
