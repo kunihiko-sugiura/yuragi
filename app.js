@@ -1,7 +1,7 @@
 // @ts-check
 (() => {
   'use strict';
-  const { CONFIG, createEngine, loudnessAt } = Yuragi;
+  const { CONFIG, createEngine, loudnessAt, nominalLength } = Yuragi;
   const FADE_IN = 0.5;
 
   /**
@@ -69,6 +69,63 @@
   addEventListener('resize', resize);
   resize();
 
+  const TURN = Math.PI * 2;
+  const TOP = -Math.PI / 2;
+  // 輪の一周がその声部の周期。真上が現在で、時計回りの側が過去、反対側が未来。
+  const AHEAD = 0.6;
+  const BEHIND = 0.4;
+  const FUTURE_LEVEL = 0.5;
+  const FADE_STEPS = 8;
+
+  /**
+   * 真上からの角度だけで決まる濃さ。過去は回るうちに消え、未来は近づくにつれて現れる。
+   * @param {number} cx
+   * @param {number} cy
+   * @param {string} color hsl の中身。alpha は含めない
+   * @param {number} strength
+   */
+  function fadeAround(cx, cy, color, strength) {
+    const fade = pen.createConicGradient(TOP, cx, cy);
+    for (let i = 0; i <= FADE_STEPS; i++) {
+      const k = i / FADE_STEPS;
+      fade.addColorStop(k * BEHIND, `hsl(${color} / ${strength * (1 - k) ** 2})`);
+      fade.addColorStop(1 - AHEAD + k * AHEAD, `hsl(${color} / ${strength * FUTURE_LEVEL * k ** 2})`);
+    }
+    return fade;
+  }
+
+  /**
+   * 1音の音量の形を、輪に沿った帯の太さとして描く。
+   * @param {{ time: number, dur: number, timbre: TimbreName }} note
+   * @param {number} now
+   * @param {number} period
+   * @param {number} cx
+   * @param {number} cy
+   * @param {number} radius
+   * @param {number} reach 帯の最大の半幅
+   */
+  function traceWave(note, now, period, cx, cy, radius, reach) {
+    const from = Math.max(note.time, now - BEHIND * period);
+    const to = Math.min(note.time + note.dur, now + AHEAD * period);
+    if (from >= to) return;
+    const timbre = CONFIG.timbres[note.timbre];
+    const half = reach * Math.sqrt(timbre.visualScale);
+    const steps = Math.max(2, Math.ceil(((to - from) / period) * TURN * radius / 3));
+    /** @type {[number, number][]} */
+    const inner = [];
+    pen.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const t = from + ((to - from) * i) / steps;
+      const angle = TOP + (TURN * (now - t)) / period;
+      const width = 0.5 + half * Math.cbrt(loudnessAt(timbre, t - note.time, note.dur));
+      pen.lineTo(cx + Math.cos(angle) * (radius + width), cy + Math.sin(angle) * (radius + width));
+      inner.push([cx + Math.cos(angle) * (radius - width), cy + Math.sin(angle) * (radius - width)]);
+    }
+    for (const [x, y] of inner.reverse()) pen.lineTo(x, y);
+    pen.closePath();
+    pen.fill();
+  }
+
   function draw() {
     pen.clearRect(0, 0, innerWidth, innerHeight);
 
@@ -77,30 +134,47 @@
     const lightness = style.getPropertyValue('--circle-lightness');
     const strength = Number(style.getPropertyValue('--circle-alpha'));
     const now = context.currentTime - (context.outputLatency || 0);
-    const unit = Math.min(innerWidth, innerHeight) * 0.17;
     const audible = engine.master.gain.value;
+    const cx = innerWidth / 2;
+    const cy = innerHeight * 0.46;
+    const outer = Math.min(innerWidth, innerHeight) * 0.36;
+    const gap = (outer * 0.68) / (engine.voices.length - 1);
 
-    player.events = player.events.filter((ev) => ev.time + ev.dur > now);
-    for (const ev of player.events) {
-      const age = now - ev.time;
-      if (age < 0) continue;
-      const voice = CONFIG.voices[ev.voice];
-      const timbre = CONFIG.timbres[ev.timbre];
-      const alpha = Math.cbrt(loudnessAt(timbre, age, ev.dur)) * strength * audible;
-      if (alpha < 0.003) continue;
-      const growth = reducedMotion.matches ? 1 : 0.75 + 0.45 * Math.sqrt(age / ev.dur);
-      const radius = unit * voice.size * timbre.visualScale * growth;
-      const x = voice.x * innerWidth;
-      const y = voice.y * innerHeight;
-      const hue = 168 + ev.voice * 11;
-      const wash = pen.createRadialGradient(x, y, 0, x, y, radius);
-      wash.addColorStop(0, `hsl(${hue} ${saturation} ${lightness} / ${alpha})`);
-      wash.addColorStop(0.45, `hsl(${hue} ${saturation} ${lightness} / ${alpha * 0.55})`);
-      wash.addColorStop(1, `hsl(${hue} ${saturation} ${lightness} / 0)`);
-      pen.fillStyle = wash;
+    player.events = player.events.filter((ev) => ev.time + ev.dur > now - BEHIND * engine.voices[ev.voice].period);
+    for (const voice of engine.voices) {
+      // 低い声部ほど外側の大きな輪にする。
+      const radius = outer - voice.index * gap;
+      const color = `${168 + voice.index * 11} ${saturation} ${lightness}`;
+
+      pen.strokeStyle = `hsl(${color} / ${strength * 0.14})`;
+      pen.lineWidth = 1;
       pen.beginPath();
-      pen.arc(x, y, radius, 0, Math.PI * 2);
-      pen.fill();
+      pen.arc(cx, cy, radius, 0, TURN);
+      pen.stroke();
+
+      const sounded = player.events.filter((ev) => ev.voice === voice.index);
+      if (!reducedMotion.matches) {
+        const upcoming = { time: voice.next, dur: nominalLength(CONFIG.timbres[engine.timbre]), timbre: engine.timbre };
+        pen.fillStyle = fadeAround(cx, cy, color, strength * 1.6);
+        for (const note of [...sounded, upcoming]) traceWave(note, now, voice.period, cx, cy, radius, gap * 0.3);
+      }
+
+      for (const ev of sounded) {
+        const age = now - ev.time;
+        if (age < 0 || age > ev.dur) continue;
+        const timbre = CONFIG.timbres[ev.timbre];
+        const alpha = Math.cbrt(loudnessAt(timbre, age, ev.dur)) * strength * audible;
+        const spread = gap * (0.9 + timbre.visualScale);
+        const y = cy - radius;
+        const wash = pen.createRadialGradient(cx, y, 0, cx, y, spread);
+        wash.addColorStop(0, `hsl(${color} / ${alpha})`);
+        wash.addColorStop(0.45, `hsl(${color} / ${alpha * 0.45})`);
+        wash.addColorStop(1, `hsl(${color} / 0)`);
+        pen.fillStyle = wash;
+        pen.beginPath();
+        pen.arc(cx, y, spread, 0, TURN);
+        pen.fill();
+      }
     }
     requestAnimationFrame(draw);
   }
