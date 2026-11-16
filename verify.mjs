@@ -126,6 +126,9 @@ try {
     const pad = await evaluate('({ timbres: [...new Set(window.__yuragi.events.map((e) => e.timbre))], pressed: document.querySelector("#timbre-pad").getAttribute("aria-pressed") })');
     assert(pad.pressed === 'true' && pad.timbres.includes('pad'), `パッドへ切替後の新しい音がパッドになる ${JSON.stringify(pad)}`);
     await shot('playing-pad.png');
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+    await sleep(300);
+    await shot('playing-pad-light.png');
   }
 
   assert(problems.length === 0, `コンソールエラー・例外がない ${problems.join(' | ')}`);
