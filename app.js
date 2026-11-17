@@ -52,6 +52,23 @@
   }
   for (const type of ['pointerdown', 'pointerup', 'keydown']) addEventListener(type, wake);
 
+  // 発音が始まるまでは呼吸する輪を1本だけ見せ、始まったら本編へ溶かす。
+  // 許可済みで最初から鳴る環境でも、輪から本編への流れは必ず見せる。
+  const LOADER_MIN = 1000;
+  const BREATH = 4000;
+  const loadedAt = performance.now();
+  /** @type {number | null} */
+  let revealAt = null;
+  // 自動再生を止められたときだけ、輪の中に操作の合図を出す。
+  // 許可されていても running になるまで少しかかるので、その間は止められたと見なさない。
+  const BLOCKED_AFTER = 300;
+  let blocked = false;
+  function revealWhenRunning() {
+    if (revealAt !== null || context.state !== 'running') return;
+    revealAt = Math.max(performance.now(), loadedAt + LOADER_MIN);
+    setTimeout(() => document.body.classList.add('started'), revealAt - performance.now());
+  }
+
   for (const button of timbreButtons) {
     button.addEventListener('click', () => {
       // data-timbre はこのページで設定した値だけ。
@@ -117,6 +134,27 @@
     const cy = innerHeight * 0.46;
     const outer = Math.min(innerWidth, innerHeight) * 0.33;
     const gap = (outer * 0.66) / (engine.voices.length - 1);
+    // statechange は届かないブラウザがあるので、毎フレーム状態を見る。
+    revealWhenRunning();
+    const clock = performance.now();
+    if (revealAt === null && clock - loadedAt > BLOCKED_AFTER) blocked = true;
+    const revealMs = reducedMotion.matches ? 300 : 1200;
+    const shown = revealAt === null ? 0 : Math.min(1, Math.max(0, (clock - revealAt) / revealMs));
+
+    if (shown < 1) {
+      const breath = reducedMotion.matches ? 0 : Math.sin((TURN * (clock - loadedAt)) / BREATH);
+      const radius = Math.min(innerWidth, innerHeight) * 0.25 * (1 + 0.12 * breath);
+      ring(cx, cy, radius, 1, `hsl(212 ${saturation} ${lightness} / ${strength * (0.6 + 0.15 * breath) * (1 - shown)})`);
+      if (blocked) {
+        pen.globalAlpha = 1 - shown;
+        pen.fillStyle = style.getPropertyValue('--ink-faint').trim();
+        pen.font = `15px ${getComputedStyle(document.body).fontFamily}`;
+        pen.textAlign = 'center';
+        pen.textBaseline = 'middle';
+        pen.fillText('click', cx, cy);
+      }
+    }
+    pen.globalAlpha = shown;
 
     player.events = player.events.filter((ev) => ev.time + ev.dur > now - BEHIND * engine.voices[ev.voice].period);
     for (const voice of engine.voices) {
@@ -155,6 +193,7 @@
         }
       }
     }
+    pen.globalAlpha = 1;
     requestAnimationFrame(draw);
   }
   requestAnimationFrame(draw);

@@ -13,6 +13,7 @@
     --circle-saturation: 30%;
     --circle-lightness: 58%;
     --circle-alpha: 0.8;
+    --reveal: 1.2s;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -32,6 +33,8 @@
     font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
     overflow: hidden;
   }
+  /* 音が始まる前は画面全体が開始の入口。 */
+  body:not(.started) { cursor: pointer; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   nav {
     position: fixed;
@@ -43,7 +46,9 @@
     align-items: center;
     gap: 20px;
     padding: 0 16px;
+    transition: opacity var(--reveal) ease;
   }
+  body:not(.started) nav { opacity: 0; visibility: hidden; }
   button {
     color: var(--ink);
     background: none;
@@ -59,7 +64,10 @@
   button:focus-visible { outline: 1px solid var(--ink-faint); outline-offset: 4px; }
   button[aria-pressed="true"] { opacity: 1; }
   svg { display: block; width: 32px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
-  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    :root { --reveal: 0.3s; }
+    button { transition: none; }
+  }
 </style>
 </head>
 <body>
