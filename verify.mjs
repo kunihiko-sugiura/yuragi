@@ -108,6 +108,7 @@ try {
     await open('index.html');
     assert((await evaluate('document.querySelectorAll("button").length')) === 2, '操作は音色の 2 つだけ');
     assert((await evaluate('window.__yuragi.context.state')) === 'suspended', '操作前はブラウザが発音を止めている');
+    assert((await evaluate('document.body.classList.contains("started")')) === false, '操作前は輪だけを見せ、音色ボタンを隠す');
     await shot('waiting.png');
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 640, y: 300, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 640, y: 300, button: 'left', clickCount: 1 });
@@ -120,6 +121,7 @@ try {
     const playing = await evaluate('({ audio: window.__yuragi.context.state, time: window.__yuragi.context.currentTime, played: window.__yuragi.played, level: window.__yuragi.level() })');
     assert(playing.audio === 'running' && playing.time > 3, `画面のどこかに触れると AudioContext が進む ${JSON.stringify(playing)}`);
     assert(playing.played > 0 && playing.level > 0, '再生中に発音があり、出力レベルが 0 でない');
+    assert((await evaluate('document.body.classList.contains("started")')) === true, '発音が始まると本編と音色ボタンが現れる');
     await shot('playing-piano.png');
     await click('#timbre-pad');
     await sleep(9000);
