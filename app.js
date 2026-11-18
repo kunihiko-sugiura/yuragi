@@ -148,10 +148,13 @@
       if (blocked) {
         pen.globalAlpha = 1 - shown;
         pen.fillStyle = style.getPropertyValue('--ink-faint').trim();
-        pen.font = `15px ${getComputedStyle(document.body).fontFamily}`;
+        pen.font = '300 11px system-ui, sans-serif';
+        pen.letterSpacing = '3px';
         pen.textAlign = 'center';
         pen.textBaseline = 'middle';
-        pen.fillText('click', cx, cy);
+        // 字間は最後の文字の後ろにも付くので、その半分だけ右へずらして中央に置く。
+        pen.fillText('click', cx + 1.5, cy);
+        pen.letterSpacing = '0px';
       }
     }
     pen.globalAlpha = shown;
