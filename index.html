@@ -10,6 +10,11 @@
     --paper: #efede7;
     --ink: #5c6466;
     --ink-faint: #7d8482;
+    --ground-l: 0.62;
+    --ground-c: 0.035;
+    --lamp-l: 0.56;
+    --lamp-c: 0.13;
+    --lamp-h: 68;
     --circle-saturation: 30%;
     --circle-lightness: 58%;
     --circle-alpha: 0.8;
@@ -17,13 +22,18 @@
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --paper: #141718;
+      --paper: #11151b;
       --ink: #a9b0b0;
       --ink-faint: #737b7c;
+      --ground-l: 0.8;
+      --ground-c: 0.04;
+      --lamp-l: 0.84;
+      --lamp-c: 0.11;
       --circle-saturation: 42%;
       --circle-lightness: 80%;
       --circle-alpha: 0.8;
     }
+    :root[data-palette="v2"] { --paper: #141718; }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }

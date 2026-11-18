@@ -105,11 +105,29 @@ try {
   if (process.argv.includes('--live')) {
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(here, 'verify-out'), { recursive: true });
+    // 画面の線のうち、赤みが青みより強い画素の数。灯りの琥珀色だけがこれに当たる。
+    const warmPixels = () => evaluate(`(() => {
+      const c = document.getElementById('field');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 40 && d[i] - d[i + 2] > 30) n++;
+      return n;
+    })()`);
+    const waitForWarm = async () => {
+      for (let i = 0; i < 40; i++) {
+        const n = await warmPixels();
+        if (n > 0) return n;
+        await sleep(500);
+      }
+      return 0;
+    };
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     await open('index.html');
     assert((await evaluate('document.querySelectorAll("button").length')) === 2, '操作は音色の 2 つだけ');
     assert((await evaluate('window.__yuragi.context.state')) === 'suspended', '操作前はブラウザが発音を止めている');
     assert((await evaluate('document.body.classList.contains("started")')) === false, '操作前は輪だけを見せ、音色ボタンを隠す');
     await shot('waiting.png');
+    assert((await warmPixels()) === 0, '鳴る前の呼吸する輪は地の色で、灯りはまだない');
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 640, y: 300, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 640, y: 300, button: 'left', clickCount: 1 });
     await sleep(3000);
@@ -122,6 +140,8 @@ try {
     assert(playing.audio === 'running' && playing.time > 3, `画面のどこかに触れると AudioContext が進む ${JSON.stringify(playing)}`);
     assert(playing.played > 0 && playing.level > 0, '再生中に発音があり、出力レベルが 0 でない');
     assert((await evaluate('document.body.classList.contains("started")')) === true, '発音が始まると本編と音色ボタンが現れる');
+    const lit = await waitForWarm();
+    assert(lit > 0, `鳴っている音が琥珀色に灯る [${lit} px]`);
     await shot('playing-piano.png');
     await click('#timbre-pad');
     await sleep(9000);
@@ -131,6 +151,16 @@ try {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
     await sleep(300);
     await shot('playing-pad-light.png');
+    const litLight = await waitForWarm();
+    assert(litLight > 0, `ライトモードでも灯りが見える [${litLight} px]`);
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+    await open('index.html', '?palette=v2');
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 640, y: 300, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 640, y: 300, button: 'left', clickCount: 1 });
+    await sleep(12000);
+    const legacy = await evaluate('({ palette: document.documentElement.dataset.palette, paper: getComputedStyle(document.body).backgroundColor, played: window.__yuragi.played })');
+    assert(legacy.palette === 'v2' && legacy.paper === 'rgb(20, 23, 24)' && legacy.played > 0, `?palette=v2 で改訂前の配色に戻る ${JSON.stringify(legacy)}`);
+    await shot('playing-piano-v2.png');
   }
 
   assert(problems.length === 0, `コンソールエラー・例外がない ${problems.join(' | ')}`);
