@@ -26,6 +26,9 @@
   /** @type {TimbreName} */
   const pianoTimbre = params.get('a') === 'soft' ? 'pianoSoft' : 'piano';
   byId('timbre-piano', HTMLButtonElement).dataset.timbre = pianoTimbre;
+  // 改訂前の配色と見比べるための入口。?palette=v2 で寒色から桃色までの配色に戻る。
+  const legacyPalette = params.get('palette') === 'v2';
+  if (legacyPalette) document.documentElement.dataset.palette = 'v2';
 
   const context = new AudioContext({ latencyHint: 'playback' });
   const engine = createEngine(context, { timbre: pianoTimbre, tuning });
@@ -95,8 +98,59 @@
   const FUTURE_LEVEL = 0.55;
   // 1音を何本の円で表すか。線の太さがその瞬間の音量になる。
   const LINES = 7;
-  // 声部ごとの淡い色。水色から藤色、最後に薄い桃色まで。
-  const HUES = [172, 192, 212, 236, 268, 318];
+  // 地の色相。声部ごとの違いは寒色の中にかすかに残す。値は OKLCH の色相。
+  const GROUND_HUES = [215, 225, 235, 245, 255, 265];
+  // 改訂前の配色（?palette=v2）。HSL の色相で、水色から藤色、最後に薄い桃色まで。
+  const V2_HUES = [172, 192, 212, 236, 268, 318];
+  const HUES = legacyPalette ? V2_HUES : GROUND_HUES;
+  const BREATH_HUE = legacyPalette ? 212 : 235;
+  // 灯りは現在の輪を過ぎてから、この隔たり（周期を1とする）までに地の色へ冷める。
+  const COOL = 0.3;
+  // 1音ごとの灯りの色相のゆらぎ（度）。
+  const LAMP_SWAY = 3;
+
+  /**
+   * OKLCH を OKLab の [L, a, b] に直す。
+   * @param {number} l
+   * @param {number} c
+   * @param {number} h 度
+   */
+  function oklab(l, c, h) {
+    const rad = (h * Math.PI) / 180;
+    return [l, c * Math.cos(rad), c * Math.sin(rad)];
+  }
+
+  /**
+   * 音ごとに決まった、-1〜1 の値。描画のたびに同じ値を返す。
+   * @param {number} time
+   */
+  function noteSway(time) {
+    const x = Math.sin(time * 12.9898) * 43758.5453;
+    return 2 * (x - Math.floor(x)) - 1;
+  }
+
+  /**
+   * その時点の配色で、線の色を作る関数を返す。
+   * warmth が 0 なら地の色、1 なら灯りの色。灯りから地へは OKLab で混ぜるので、
+   * 途中で灰色がかった色を通る。
+   * @param {CSSStyleDeclaration} style
+   * @returns {(hue: number, warmth: number, sway: number, alpha: number) => string}
+   */
+  function paletteFrom(style) {
+    const read = (/** @type {string} */ name) => style.getPropertyValue(name).trim();
+    if (legacyPalette) {
+      const sl = `${read('--circle-saturation')} ${read('--circle-lightness')}`;
+      return (hue, _warmth, _sway, alpha) => `hsl(${hue} ${sl} / ${alpha})`;
+    }
+    const [groundL, groundC] = [Number(read('--ground-l')), Number(read('--ground-c'))];
+    const [lampL, lampC, lampH] = [Number(read('--lamp-l')), Number(read('--lamp-c')), Number(read('--lamp-h'))];
+    return (hue, warmth, sway, alpha) => {
+      const ground = oklab(groundL, groundC, hue);
+      const lamp = oklab(lampL, lampC, lampH + LAMP_SWAY * sway);
+      const [l, a, b] = ground.map((g, i) => g + (lamp[i] - g) * warmth);
+      return `oklab(${l} ${a} ${b} / ${alpha})`;
+    };
+  }
 
   /**
    * 現在からの隔たり（周期を1とする。正が過去）に応じた濃さ。
@@ -126,9 +180,8 @@
     pen.clearRect(0, 0, innerWidth, innerHeight);
 
     const style = getComputedStyle(document.documentElement);
-    const saturation = style.getPropertyValue('--circle-saturation');
-    const lightness = style.getPropertyValue('--circle-lightness');
     const strength = Number(style.getPropertyValue('--circle-alpha'));
+    const tint = paletteFrom(style);
     const now = context.currentTime - (context.outputLatency || 0);
     const cx = innerWidth / 2;
     const cy = innerHeight * 0.46;
@@ -144,7 +197,7 @@
     if (shown < 1) {
       const breath = reducedMotion.matches ? 0 : Math.sin((TURN * (clock - loadedAt)) / BREATH);
       const radius = Math.min(innerWidth, innerHeight) * 0.25 * (1 + 0.12 * breath);
-      ring(cx, cy, radius, 1, `hsl(212 ${saturation} ${lightness} / ${strength * (0.6 + 0.15 * breath) * (1 - shown)})`);
+      ring(cx, cy, radius, 1, tint(BREATH_HUE, 0, 0, strength * (0.6 + 0.15 * breath) * (1 - shown)));
       if (blocked) {
         pen.globalAlpha = 1 - shown;
         pen.fillStyle = style.getPropertyValue('--ink-faint').trim();
@@ -163,20 +216,25 @@
     for (const voice of engine.voices) {
       // 低い声部ほど外側の大きな輪にする。
       const home = outer - voice.index * gap;
-      const color = `${HUES[voice.index % HUES.length]} ${saturation} ${lightness}`;
+      const hue = HUES[voice.index % HUES.length];
       const sounded = player.events.filter((ev) => ev.voice === voice.index);
 
       let sounding = 0;
+      let sway = 0;
       for (const ev of sounded) {
         const age = now - ev.time;
-        if (age >= 0 && age <= ev.dur) sounding = Math.max(sounding, Math.cbrt(loudnessAt(CONFIG.timbres[ev.timbre], age, ev.dur)));
+        if (age < 0 || age > ev.dur) continue;
+        const loud = Math.cbrt(loudnessAt(CONFIG.timbres[ev.timbre], age, ev.dur));
+        if (loud > sounding) [sounding, sway] = [loud, noteSway(ev.time)];
       }
-      ring(cx, cy, home, 0.75 + 3 * sounding, `hsl(${color} / ${strength * (0.45 + 0.55 * sounding)})`);
+      // 小さい音はほのかに、大きい音はしっかり灯る。
+      ring(cx, cy, home, 0.75 + 3 * sounding, tint(hue, sounding ** 2, sway, strength * (0.45 + 0.55 * sounding)));
       if (reducedMotion.matches) continue;
 
       const upcoming = { time: voice.next, dur: nominalLength(CONFIG.timbres[engine.timbre]), timbre: engine.timbre };
       for (const note of [...sounded, upcoming]) {
         const timbre = CONFIG.timbres[note.timbre];
+        const sway = noteSway(note.time);
         for (let i = 0; i < LINES; i++) {
           const offset = (note.dur * (i + 0.1)) / LINES;
           const away = (now - note.time - offset) / voice.period;
@@ -191,7 +249,8 @@
             cy + Math.sin(turn) * drift,
             Math.max(1, home + gap * 3 * away),
             0.5 + 2.5 * loud * Math.sqrt(timbre.visualScale),
-            `hsl(${color} / ${strength * shown * (0.3 + 0.7 * loud)})`,
+            // 現在の輪に重なるまでは地の色。重なった瞬間に灯り、外へ広がりながら冷める。
+            tint(hue, away < 0 ? 0 : loud ** 2 * Math.max(0, 1 - away / COOL), sway, strength * shown * (0.3 + 0.7 * loud)),
           );
         }
       }
