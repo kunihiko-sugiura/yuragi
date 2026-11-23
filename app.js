@@ -18,14 +18,12 @@
 
   const canvas = byId('field', HTMLCanvasElement);
   const pen = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
-  const timbreButtons = [...document.querySelectorAll('button[data-timbre]')].filter((b) => b instanceof HTMLButtonElement);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const params = new URLSearchParams(location.search);
   const tuning = params.get('tuning');
   // 改訂前のピアノと聴き比べるための入口。?a=soft でピアノ側が旧音色になる。
   /** @type {TimbreName} */
   const pianoTimbre = params.get('a') === 'soft' ? 'pianoSoft' : 'piano';
-  byId('timbre-piano', HTMLButtonElement).dataset.timbre = pianoTimbre;
 
   const context = new AudioContext({ latencyHint: 'playback' });
   const engine = createEngine(context, { timbre: pianoTimbre, tuning });
@@ -69,13 +67,24 @@
     setTimeout(() => document.body.classList.add('started'), revealAt - performance.now());
   }
 
-  for (const button of timbreButtons) {
-    button.addEventListener('click', () => {
-      // data-timbre はこのページで設定した値だけ。
-      engine.timbre = /** @type {TimbreName} */ (button.dataset.timbre);
-      for (const other of timbreButtons) other.setAttribute('aria-pressed', String(other === button));
-    });
+  // 音色はチャンネルのように 1 つのボタンで順に送る。アイコンは今の音色を表す。
+  const timbreButton = byId('timbre', HTMLButtonElement);
+  /** @type {[TimbreName, string][]} */
+  const timbreCycle = [[pianoTimbre, 'ピアノ的'], ['pad', 'パッド的'], ['bell', 'ガラスの鈴']];
+  let timbreIndex = 0;
+  function showTimbre() {
+    const [name, label] = timbreCycle[timbreIndex];
+    engine.timbre = name;
+    timbreButton.dataset.timbre = name;
+    timbreButton.setAttribute('aria-label', `音色: ${label}（押すと次の音色へ）`);
+    const slot = timbreIndex === 0 ? 'piano' : name;
+    for (const icon of timbreButton.querySelectorAll('svg')) icon.toggleAttribute('hidden', icon.dataset.for !== slot);
   }
+  timbreButton.addEventListener('click', () => {
+    timbreIndex = (timbreIndex + 1) % timbreCycle.length;
+    showTimbre();
+  });
+  showTimbre();
 
   function resize() {
     const ratio = Math.min(devicePixelRatio || 1, 2);

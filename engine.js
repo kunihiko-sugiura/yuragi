@@ -68,6 +68,24 @@
         level: 0.17,
         visualScale: 1.5,
       },
+      bell: {
+        octave: 1,
+        partials: 4,
+        // 両端自由の棒の振動モード。整数倍から外れた倍音が、ガラスや鉄琴の澄んだ響きになる。
+        ratios: [1, 2.756, 5.404, 8.933],
+        rolloff: 1.3,
+        inharmonicity: 0,
+        attack: 0.003,
+        hold: 0,
+        release: 9.0,
+        decay: { prompt60: 3.0, after60: 14, after: 0.35, tilt: 1.2 },
+        cutoff: 12,
+        beatHz: [0.2, 0.8],
+        unison: 0.35,
+        drift: { shared: 0.3, layer: 0.05 },
+        level: 0.4,
+        visualScale: 0.5,
+      },
     },
     yuragi: {
       partialDb: 1.5,
@@ -256,7 +274,7 @@
     for (let k = 1; k <= timbre.partials; k++) total += k ** -timbre.rolloff;
 
     for (let k = 1; k <= timbre.partials; k++) {
-      const hz = k * f0 * Math.sqrt(1 + timbre.inharmonicity * k * k);
+      const hz = timbre.ratios ? timbre.ratios[k - 1] * f0 : k * f0 * Math.sqrt(1 + timbre.inharmonicity * k * k);
       if (hz > ctx.sampleRate * 0.45) break;
       const amp = k ** -timbre.rolloff / total / (1 + timbre.unison);
       const wobble = pinkCurve(dur, rate.partial, y);

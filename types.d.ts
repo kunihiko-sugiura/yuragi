@@ -3,7 +3,7 @@
 
 type Degree = 'Db' | 'Eb' | 'F' | 'Ab' | 'Bb';
 type TuningName = 'et' | 'just' | 'pyth';
-type TimbreName = 'piano' | 'pianoSoft' | 'pad';
+type TimbreName = 'piano' | 'pianoSoft' | 'pad' | 'bell';
 
 /** 主音（Db）に対する周波数比 */
 type Ratios = Record<Degree, number>;
@@ -30,6 +30,8 @@ interface Decay {
 interface Timbre {
   octave: number;
   partials: number;
+  /** 基音に対する各倍音の周波数比。あれば整数倍と inharmonicity の代わりに使う（長さは partials 以上） */
+  ratios?: number[];
   rolloff: number;
   inharmonicity: number;
   attack: number;
