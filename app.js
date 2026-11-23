@@ -22,13 +22,15 @@
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const params = new URLSearchParams(location.search);
   const tuning = params.get('tuning');
+  // ?set=floating で浮遊の組から始まる。未知の値は既定の組になる。
+  const loopSet = params.get('set');
   // 改訂前のピアノと聴き比べるための入口。?a=soft でピアノ側が旧音色になる。
   /** @type {TimbreName} */
   const pianoTimbre = params.get('a') === 'soft' ? 'pianoSoft' : 'piano';
   byId('timbre-piano', HTMLButtonElement).dataset.timbre = pianoTimbre;
 
   const context = new AudioContext({ latencyHint: 'playback' });
-  const engine = createEngine(context, { timbre: pianoTimbre, tuning });
+  const engine = createEngine(context, { timbre: pianoTimbre, tuning, set: loopSet });
   const analyser = context.createAnalyser();
   /** @type {{ events: NoteEvent[], played: number }} */
   const player = { events: [], played: 0 };
@@ -76,6 +78,19 @@
       for (const other of timbreButtons) other.setAttribute('aria-pressed', String(other === button));
     });
   }
+
+  // ループと音階の組は1つのボタンで、押すたびに次の組へ巡る。
+  const setButton = byId('loop-set', HTMLButtonElement);
+  const setNames = /** @type {SetName[]} */ (Object.keys(CONFIG.sets));
+  function showSet() {
+    setButton.dataset.set = engine.loopSet;
+    setButton.setAttribute('aria-label', `ループと音階: ${CONFIG.sets[engine.loopSet].label}（押すと次へ）`);
+  }
+  setButton.addEventListener('click', () => {
+    engine.loopSet = setNames[(setNames.indexOf(engine.loopSet) + 1) % setNames.length];
+    showSet();
+  });
+  showSet();
 
   function resize() {
     const ratio = Math.min(devicePixelRatio || 1, 2);
@@ -206,6 +221,7 @@
     context,
     get events() { return player.events; },
     get played() { return player.played; },
+    get loopSet() { return engine.loopSet; },
     level() {
       const data = new Float32Array(analyser.fftSize);
       analyser.getFloatTimeDomainData(data);

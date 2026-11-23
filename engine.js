@@ -6,19 +6,41 @@
   const CONFIG = {
     rootHz: 138.591,
     tuning: 'et',
-    tunings: {
-      et: { Db: 1, Eb: 2 ** (2 / 12), F: 2 ** (4 / 12), Ab: 2 ** (7 / 12), Bb: 2 ** (9 / 12) },
-      just: { Db: 1, Eb: 9 / 8, F: 5 / 4, Ab: 3 / 2, Bb: 5 / 3 },
-      pyth: { Db: 1, Eb: 9 / 8, F: 81 / 64, Ab: 3 / 2, Bb: 27 / 16 },
+    set: 'pentatonic',
+    // ループと音階の組。声部の数はどの組も6つ。周期は0.1秒単位の整数にすると互いに素。
+    sets: {
+      pentatonic: {
+        label: 'ペンタトニック',
+        tunings: {
+          et: { Db: 1, Eb: 2 ** (2 / 12), F: 2 ** (4 / 12), Ab: 2 ** (7 / 12), Bb: 2 ** (9 / 12) },
+          just: { Db: 1, Eb: 9 / 8, F: 5 / 4, Ab: 3 / 2, Bb: 5 / 3 },
+          pyth: { Db: 1, Eb: 9 / 8, F: 81 / 64, Ab: 3 / 2, Bb: 27 / 16 },
+        },
+        voices: [
+          { name: 'F3', degree: 'F', octave: 0, period: 17.3, x: 0.3, y: 0.68, size: 1.25 },
+          { name: 'A♭3', degree: 'Ab', octave: 0, period: 19.7, x: 0.63, y: 0.74, size: 1.15 },
+          { name: 'B♭3', degree: 'Bb', octave: 0, period: 23.1, x: 0.46, y: 0.52, size: 1.05 },
+          { name: 'D♭4', degree: 'Db', octave: 1, period: 26.3, x: 0.73, y: 0.43, size: 0.95 },
+          { name: 'E♭4', degree: 'Eb', octave: 1, period: 29.9, x: 0.27, y: 0.35, size: 0.88 },
+          { name: 'A♭4', degree: 'Ab', octave: 1, period: 31.7, x: 0.55, y: 0.23, size: 0.8 },
+        ],
+      },
+      floating: {
+        label: '浮遊',
+        // D♭全音音階。音の間隔がすべて等しいので純正律・ピタゴラス律は成り立たず、平均律だけを持つ。
+        tunings: {
+          et: { Db: 1, Eb: 2 ** (2 / 12), F: 2 ** (4 / 12), G: 2 ** (6 / 12), A: 2 ** (8 / 12), B: 2 ** (10 / 12) },
+        },
+        voices: [
+          { name: 'F3', degree: 'F', octave: 0, period: 15.7, x: 0.3, y: 0.68, size: 1.25 },
+          { name: 'A3', degree: 'A', octave: 0, period: 18.1, x: 0.63, y: 0.74, size: 1.15 },
+          { name: 'B3', degree: 'B', octave: 0, period: 21.1, x: 0.46, y: 0.52, size: 1.05 },
+          { name: 'D♭4', degree: 'Db', octave: 1, period: 24.1, x: 0.73, y: 0.43, size: 0.95 },
+          { name: 'E♭4', degree: 'Eb', octave: 1, period: 27.7, x: 0.27, y: 0.35, size: 0.88 },
+          { name: 'G4', degree: 'G', octave: 1, period: 30.7, x: 0.55, y: 0.23, size: 0.8 },
+        ],
+      },
     },
-    voices: [
-      { name: 'F3', degree: 'F', octave: 0, period: 17.3, x: 0.3, y: 0.68, size: 1.25 },
-      { name: 'A♭3', degree: 'Ab', octave: 0, period: 19.7, x: 0.63, y: 0.74, size: 1.15 },
-      { name: 'B♭3', degree: 'Bb', octave: 0, period: 23.1, x: 0.46, y: 0.52, size: 1.05 },
-      { name: 'D♭4', degree: 'Db', octave: 1, period: 26.3, x: 0.73, y: 0.43, size: 0.95 },
-      { name: 'E♭4', degree: 'Eb', octave: 1, period: 29.9, x: 0.27, y: 0.35, size: 0.88 },
-      { name: 'A♭4', degree: 'Ab', octave: 1, period: 31.7, x: 0.55, y: 0.23, size: 0.8 },
-    ],
     timbres: {
       piano: {
         octave: 1,
@@ -301,7 +323,8 @@
    */
   function createEngine(ctx, options = {}) {
     const config = options.config || CONFIG;
-    const ratios = hasKey(config.tunings, options.tuning) ? config.tunings[options.tuning] : config.tunings[config.tuning];
+    /** @type {SetName} */
+    let setName = hasKey(config.sets, options.set) ? options.set : config.set;
     /** @type {TimbreName} */
     let timbreName = options.timbre || 'piano';
 
@@ -317,14 +340,21 @@
     input.connect(dry).connect(master);
     input.connect(convolver).connect(wet).connect(master);
 
-    /** @type {Voice[]} */
-    const voices = config.voices.map((voice, index) => ({
-      ...voice,
-      index,
-      freq: config.rootHz * ratios[voice.degree] * 2 ** voice.octave,
-      next: 0,
-      jitter: 0,
-    }));
+    /**
+     * 組の声部を作る。その組にない調律が指定されたら、組の既定、最後に平均律を使う。
+     * @param {SetName} name
+     * @returns {Voice[]}
+     */
+    function voicesOf(name) {
+      const set = config.sets[name];
+      const ratios = (hasKey(set.tunings, options.tuning) && set.tunings[options.tuning]) || set.tunings[config.tuning] || set.tunings.et;
+      return set.voices.map((voice, index) => {
+        const ratio = ratios[voice.degree];
+        if (ratio === undefined) throw new Error(`${name} の調律に ${voice.degree} がない`);
+        return { ...voice, index, freq: config.rootHz * ratio * 2 ** voice.octave, next: 0, jitter: 0 };
+      });
+    }
+    let voices = voicesOf(setName);
 
     /** @param {number} time */
     function start(time) {
@@ -368,7 +398,9 @@
 
     return {
       master,
-      voices,
+      get voices() {
+        return voices;
+      },
       start,
       scheduleUntil,
       get timbre() {
@@ -376,6 +408,17 @@
       },
       set timbre(name) {
         if (hasKey(config.timbres, name)) timbreName = name;
+      },
+      get loopSet() {
+        return setName;
+      },
+      // 鳴っている音はそのまま余韻を残し、次の音から新しい組で鳴らす。
+      set loopSet(name) {
+        if (!hasKey(config.sets, name) || name === setName) return;
+        setName = name;
+        voices = voicesOf(name);
+        // 次の予約が来る前に過ぎないよう、予約の間隔ぶん先から始める。
+        start(ctx.currentTime + config.scheduler.tick + config.scheduler.lead);
       },
     };
   }
