@@ -90,8 +90,9 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
 
+  // 組ごとに全音色を描画するので、5分ぶんの描画は遅い環境で20分を超える。待つのは40分まで。
   await open('verify.html', `?seconds=${process.env.SECONDS || 300}`);
-  for (let i = 0; i < 2400 && (await evaluate('document.title')) === 'running'; i++) await sleep(500);
+  for (let i = 0; i < 4800 && (await evaluate('document.title')) === 'running'; i++) await sleep(500);
   const text = await evaluate('document.getElementById("out").textContent');
   const title = await evaluate('document.title');
   if (title === 'pass' || title === 'fail') {
@@ -106,7 +107,7 @@ try {
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(here, 'verify-out'), { recursive: true });
     await open('index.html');
-    assert((await evaluate('document.querySelectorAll("button").length')) === 2, '操作は音色の 2 つだけ');
+    assert((await evaluate('document.querySelectorAll("button").length')) === 3, '操作は音色の 2 つとループと音階の組の 1 つだけ');
     assert((await evaluate('window.__yuragi.context.state')) === 'suspended', '操作前はブラウザが発音を止めている');
     assert((await evaluate('document.body.classList.contains("started")')) === false, '操作前は輪だけを見せ、音色ボタンを隠す');
     await shot('waiting.png');
@@ -128,6 +129,23 @@ try {
     const pad = await evaluate('({ timbres: [...new Set(window.__yuragi.events.map((e) => e.timbre))], pressed: document.querySelector("#timbre-pad").getAttribute("aria-pressed") })');
     assert(pad.pressed === 'true' && pad.timbres.includes('pad'), `パッドへ切替後の新しい音がパッドになる ${JSON.stringify(pad)}`);
     await shot('playing-pad.png');
+    await click('#loop-set');
+    const switchedAt = await evaluate('window.__yuragi.context.currentTime');
+    await sleep(9000);
+    const floating = await evaluate(`({
+      set: window.__yuragi.loopSet,
+      shown: document.querySelector('#loop-set').dataset.set,
+      after: window.__yuragi.events.filter((e) => e.time > ${switchedAt}).map((e) => ({ t: +(e.time - ${switchedAt}).toFixed(2), hz: +e.freq.toFixed(2) })),
+    })`);
+    // 浮遊の組（D♭全音音階）の周波数。切替前に予約済みの音（先読みの 2 秒ぶん）を除けば、すべてこの中にある。
+    const wholeTone = [174.61, 220.0, 246.94, 277.18, 311.13, 392.0];
+    const isWhole = (/** @type {{ hz: number }} */ e) => wholeTone.some((w) => Math.abs(w - e.hz) < 0.05);
+    const late = floating.after.filter((/** @type {{ t: number }} */ e) => e.t > 2.01);
+    assert(floating.set === 'floating' && floating.shown === 'floating' && floating.after.filter((/** @type {{ t: number }} */ e) => e.t < 1).some(isWhole) && late.every(isWhole),
+      `ボタンで浮遊の組へ切り替わり、すぐ 1 音鳴って、以降は全音音階で鳴る ${JSON.stringify(floating)}`);
+    await shot('playing-floating.png');
+    await click('#loop-set');
+    assert((await evaluate('window.__yuragi.loopSet')) === 'pentatonic', 'もう一度押すと最初の組へ戻る');
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
     await sleep(300);
     await shot('playing-pad-light.png');

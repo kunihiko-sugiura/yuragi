@@ -63,6 +63,11 @@
   button:hover { opacity: 0.7; }
   button:focus-visible { outline: 1px solid var(--ink-faint); outline-offset: 4px; }
   button[aria-pressed="true"] { opacity: 1; }
+  /* 組のボタンは押すたびに次の組へ巡る。今の組の音階の形（音の高さの並び）を点で示す。 */
+  #loop-set { opacity: 0.7; }
+  #loop-set:hover { opacity: 1; }
+  #loop-set:not([data-set="pentatonic"]) .set-pentatonic,
+  #loop-set:not([data-set="floating"]) .set-floating { display: none; }
   svg { display: block; width: 32px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
   @media (prefers-reduced-motion: reduce) {
     :root { --reveal: 0.3s; }
@@ -72,12 +77,16 @@
 </head>
 <body>
 <canvas id="field" aria-hidden="true"></canvas>
-<nav aria-label="音色">
+<nav aria-label="音色とループ">
   <button id="timbre-piano" type="button" data-timbre="piano" aria-pressed="true" aria-label="ピアノ的な音色">
     <svg viewBox="0 0 32 24" aria-hidden="true"><path d="M2.0 12.0L2.5 7.9L3.0 5.3L3.5 4.5L4.0 5.6L4.5 8.2L5.0 11.3L5.5 14.3L6.0 16.3L6.5 17.1L7.0 16.6L7.5 15.1L8.0 13.0L8.5 10.9L9.0 9.3L9.5 8.5L10.0 8.7L10.5 9.6L11.0 11.0L11.5 12.5L12.0 13.7L12.5 14.3L13.0 14.4L13.5 13.8L14.0 12.9L14.5 11.9L15.0 11.0L15.5 10.5L16.0 10.4L16.5 10.6L17.0 11.2L17.5 11.9L18.0 12.6L18.5 13.0L19.0 13.1L19.5 13.0L20.0 12.6L20.5 12.2L21.0 11.7L21.5 11.4L22.0 11.2L22.5 11.3L23.0 11.5L23.5 11.8L24.0 12.1L24.5 12.4L25.0 12.5L25.5 12.5L26.0 12.4L26.5 12.2L27.0 12.0L27.5 11.8L28.0 11.7L28.5 11.6L29.0 11.7L29.5 11.8L30.0 12.0"/></svg>
   </button>
   <button id="timbre-pad" type="button" data-timbre="pad" aria-pressed="false" aria-label="パッド的な音色">
     <svg viewBox="0 0 32 24" aria-hidden="true"><path d="M2.0 12.0L2.5 11.9L3.0 11.7L3.5 11.2L4.0 10.7L4.5 10.2L5.0 9.7L5.5 9.2L6.0 9.0L6.5 8.9L7.0 9.0L7.5 9.4L8.0 10.1L8.5 10.9L9.0 12.0L9.5 13.2L10.0 14.4L10.5 15.7L11.0 16.8L11.5 17.7L12.0 18.3L12.5 18.7L13.0 18.6L13.5 18.2L14.0 17.5L14.5 16.4L15.0 15.1L15.5 13.6L16.0 12.0L16.5 10.4L17.0 8.9L17.5 7.6L18.0 6.5L18.5 5.8L19.0 5.4L19.5 5.3L20.0 5.7L20.5 6.3L21.0 7.2L21.5 8.3L22.0 9.6L22.5 10.8L23.0 12.0L23.5 13.1L24.0 13.9L24.5 14.6L25.0 15.0L25.5 15.1L26.0 15.0L26.5 14.8L27.0 14.3L27.5 13.8L28.0 13.3L28.5 12.8L29.0 12.3L29.5 12.1L30.0 12.0"/></svg>
+  </button>
+  <button id="loop-set" type="button" data-set="pentatonic" aria-label="ループと音階: ペンタトニック（押すと次へ）">
+    <svg class="set-pentatonic" viewBox="0 0 32 24" aria-hidden="true"><circle cx="4.0" cy="20.0" r="1.6"/><circle cx="10.0" cy="16.8" r="1.6"/><circle cx="16.0" cy="13.6" r="1.6"/><circle cx="22.0" cy="8.8" r="1.6"/><circle cx="28.0" cy="5.6" r="1.6"/></svg>
+    <svg class="set-floating" viewBox="0 0 32 24" aria-hidden="true"><circle cx="4.0" cy="20.0" r="1.6"/><circle cx="8.8" cy="16.8" r="1.6"/><circle cx="13.6" cy="13.6" r="1.6"/><circle cx="18.4" cy="10.4" r="1.6"/><circle cx="23.2" cy="7.2" r="1.6"/><circle cx="28.0" cy="4.0" r="1.6"/></svg>
   </button>
 </nav>
 <script src="engine.js"></script>

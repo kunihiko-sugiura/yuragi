@@ -1,12 +1,13 @@
 // engine.js / app.js / verify-page.js が JSDoc から参照する型。
 // ブラウザはこのファイルを読まない。型検査（npm run typecheck）専用。
 
-type Degree = 'Db' | 'Eb' | 'F' | 'Ab' | 'Bb';
+type Degree = 'Db' | 'Eb' | 'F' | 'G' | 'Ab' | 'A' | 'Bb' | 'B';
 type TuningName = 'et' | 'just' | 'pyth';
 type TimbreName = 'piano' | 'pianoSoft' | 'pad';
+type SetName = 'pentatonic' | 'floating';
 
-/** 主音（Db）に対する周波数比 */
-type Ratios = Record<Degree, number>;
+/** 主音（Db）に対する周波数比。組の音階にある音だけを持つ */
+type Ratios = Partial<Record<Degree, number>>;
 
 interface VoiceSpec {
   name: string;
@@ -18,6 +19,14 @@ interface VoiceSpec {
   x: number;
   y: number;
   size: number;
+}
+
+/** ループと音階の組 */
+interface LoopSet {
+  label: string;
+  /** 平均律は必ず持つ。音階によっては純正律などが成り立たない */
+  tunings: { et: Ratios } & Partial<Record<TuningName, Ratios>>;
+  voices: VoiceSpec[];
 }
 
 interface Decay {
@@ -66,8 +75,8 @@ interface ReverbConfig {
 interface Config {
   rootHz: number;
   tuning: TuningName;
-  tunings: Record<TuningName, Ratios>;
-  voices: VoiceSpec[];
+  set: SetName;
+  sets: Record<SetName, LoopSet>;
   timbres: Record<TimbreName, Timbre>;
   yuragi: YuragiConfig;
   reverb: ReverbConfig;
@@ -98,6 +107,8 @@ interface EngineOptions {
   /** URL から渡るので任意の文字列。未知の値は CONFIG.tuning にフォールバックする */
   tuning?: string | null;
   timbre?: TimbreName;
+  /** URL から渡るので任意の文字列。未知の値は CONFIG.set にフォールバックする */
+  set?: string | null;
   /** false で残響を切る（検証用） */
   reverb?: boolean;
 }
@@ -108,6 +119,8 @@ interface Engine {
   start(time: number): void;
   scheduleUntil(until: number): NoteEvent[];
   timbre: TimbreName;
+  /** 切り替えると次の音から新しい組で鳴る */
+  loopSet: SetName;
 }
 
 interface YuragiApi {
@@ -123,6 +136,7 @@ interface DebugHandle {
   readonly context: AudioContext;
   readonly events: NoteEvent[];
   readonly played: number;
+  readonly loopSet: SetName;
   level(): number;
 }
 

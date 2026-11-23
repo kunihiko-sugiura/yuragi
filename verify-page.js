@@ -84,16 +84,26 @@ const out = /** @type {HTMLPreElement} */ (document.getElementById('out'));
    */
   const check = (name, ok, detail) => report.checks.push({ name, ok, detail });
 
+  // 組ごとの音階外の音。声部と同じ音域で、組の音階にない音を4つ選ぶ。
+  /** @type {Record<SetName, { names: string, hz: number[] }>} */
+  const OFF_SCALE = {
+    pentatonic: { names: 'D G C E', hz: [146.83, 196.0, 261.63, 329.63] },
+    floating: { names: 'D E A♭ C', hz: [146.83, 164.81, 207.65, 261.63] },
+  };
+
+  for (const set of /** @type {SetName[]} */ (Object.keys(CONFIG.sets)))
   for (const timbre of /** @type {TimbreName[]} */ (Object.keys(CONFIG.timbres))) {
     const spec = CONFIG.timbres[timbre];
-    const full = await render(timbre);
-    const dryOnly = await render(timbre, { reverb: false });
+    const full = await render(timbre, { set });
+    const dryOnly = await render(timbre, { set, reverb: false });
     const y = CONFIG.yuragi;
+    // 既定の組は従来どおりの名前で報告する。
+    const label = set === CONFIG.set ? timbre : `${set}/${timbre}`;
 
-    check(`${timbre}: 出力に NaN / Infinity がない`, full.bad === 0, full.bad);
-    check(`${timbre}: ピークが -3 dBFS 未満（リミッターなしで歪まない）`, full.peak < 0.708, `${db(full.peak)} dBFS`);
-    check(`${timbre}: 音が出ている（RMS > -50 dBFS）`, full.rms > 0.00316, `${db(full.rms)} dBFS`);
-    report[timbre] = {
+    check(`${label}: 出力に NaN / Infinity がない`, full.bad === 0, full.bad);
+    check(`${label}: ピークが -3 dBFS 未満（リミッターなしで歪まない）`, full.peak < 0.708, `${db(full.peak)} dBFS`);
+    check(`${label}: 音が出ている（RMS > -50 dBFS）`, full.rms > 0.00316, `${db(full.rms)} dBFS`);
+    report[label] = {
       peakDb: db(full.peak),
       rmsDb: db(full.rms),
       dryRmsDb: db(dryOnly.rms),
@@ -103,26 +113,26 @@ const out = /** @type {HTMLPreElement} */ (document.getElementById('out'));
       renderMs: full.ms,
     };
 
-    const byVoice = CONFIG.voices.map((_, i) => full.events.filter((e) => e.voice === i));
+    const byVoice = full.engine.voices.map((_, i) => full.events.filter((e) => e.voice === i));
     const periodOk = byVoice.every((list, i) => list.slice(1).every((e, n) => {
-      const ratio = (e.time - list[n].time) / CONFIG.voices[i].period;
+      const ratio = (e.time - list[n].time) / full.engine.voices[i].period;
       return Math.abs(ratio - 1) <= y.period + 1e-9;
     }));
-    check(`${timbre}: 各声部の周期が公称値の ±${y.period * 100}% 以内`, periodOk, byVoice.map((l) => l.length).join('/'));
-    check(`${timbre}: 開始時刻 0 で 1 声部が鳴る`, full.events.some((e) => e.time === 0), Math.min(...full.events.map((e) => e.time)));
+    check(`${label}: 各声部の周期が公称値の ±${y.period * 100}% 以内`, periodOk, byVoice.map((l) => l.length).join('/'));
+    check(`${label}: 開始時刻 0 で 1 声部が鳴る`, full.events.some((e) => e.time === 0), Math.min(...full.events.map((e) => e.time)));
     const nominal = nominalLength(spec);
-    check(`${timbre}: 1音ごとの音量・長さ・カットオフが仕様の幅に収まる`, full.events.every((e) =>
+    check(`${label}: 1音ごとの音量・長さ・カットオフが仕様の幅に収まる`, full.events.every((e) =>
       Math.abs(e.gainDb) <= y.noteDb && Math.abs(e.dur / nominal - 1) <= y.length + 1e-9 && Math.abs(e.cutoffMul - 1) <= y.cutoff + 1e-9));
 
     const onsets = full.events.map((e) => e.time).sort((a, b) => a - b);
     const gaps = onsets.slice(1).map((t, i) => +(t - onsets[i]).toFixed(2));
-    check(`${timbre}: 発音間隔の並びが繰り返さない（同じ間隔が 2 回出ない）`, new Set(gaps).size > gaps.length * 0.9, `${new Set(gaps).size}/${gaps.length} 種類`);
+    check(`${label}: 発音間隔の並びが繰り返さない（同じ間隔が 2 回出ない）`, new Set(gaps).size > gaps.length * 0.9, `${new Set(gaps).size}/${gaps.length} 種類`);
 
     const octave = 2 ** spec.octave;
     const inScale = full.engine.voices.map((v) => bandEnergy(dryOnly.left, v.freq * octave));
-    const offScale = [146.83, 196.0, 261.63, 329.63].map((hz) => bandEnergy(dryOnly.left, hz * octave));
+    const offScale = OFF_SCALE[set].hz.map((hz) => bandEnergy(dryOnly.left, hz * octave));
     const margin = db(Math.min(...inScale) / Math.max(...offScale));
-    check(`${timbre}: 音階の 6 音にエネルギーがあり、音階外（D G C E）より 20 dB 以上強い`, margin > 20, `${margin} dB`);
+    check(`${label}: 音階の 6 音にエネルギーがあり、音階外（${OFF_SCALE[set].names}）より 20 dB 以上強い`, margin > 20, `${margin} dB`);
   }
 
   /** @param {TimbreName} timbre */
